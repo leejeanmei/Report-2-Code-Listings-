@@ -1,0 +1,282 @@
+#include <LiquidCrystal.h>
+#include <Wire.h>
+#define IR_SENSOR_RIGHT A1
+#define IR_SENSOR_LEFT A3
+
+#define CLK_Encoder1 A2
+#define MPU_ADDR 0x68
+
+#define RAD_TO_DEG 57.2958
+
+// Motor Pins
+int ENA = 3;
+int ENB = 11;
+
+int motor1pin1 = 1;
+int motor1pin2 = 2;
+
+int motor2pin1 = 12;
+int motor2pin2 = 13;
+
+// LCD Pins
+const int rs = 8, en = 9, d4 = 4, d5 = 5, d6 = 6, d7 = 7;
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
+
+// Variables
+int AcX, AcY, AcZ;
+double X = 0;
+
+int minVal=0;
+int maxVal=30;
+
+volatile unsigned long encoderCounter = 0;
+float pulsesPerRevolution = 40.0;
+float wheelCircumference = 20.42;
+float distance = 0.0;
+
+// Timers
+unsigned long lastMPURead = 0;
+unsigned long lastLCDUpdate = 0;
+unsigned long mpuReadInterval = 50; // Read MPU every 50ms
+unsigned long lcdUpdateInterval = 200; // Update LCD every 200ms
+
+//movement after ramp + 360 
+unsigned long startTime = 0; // Stores when the system started
+unsigned long runDuration = 10000; // Duration in milliseconds (10 seconds)
+bool isRunning = true; // Flag to indicate if the system should run
+
+// Flags
+bool tiltActionCompleted = false;
+
+// Function Prototypes
+void readMPU6050();
+void updateDistance();
+void followLine();
+void downramp();
+void executeTiltAction();
+void displayData();
+
+void setup() {
+  // Motor setup
+  pinMode(motor1pin1, OUTPUT);
+  pinMode(motor1pin2, OUTPUT);
+  pinMode(motor2pin1, OUTPUT);
+  pinMode(motor2pin2, OUTPUT);
+  pinMode(ENA, OUTPUT);
+  pinMode(ENB, OUTPUT);
+
+  // Sensor setup
+  pinMode(IR_SENSOR_RIGHT, INPUT);
+  pinMode(IR_SENSOR_LEFT, INPUT);
+  pinMode(CLK_Encoder1, INPUT);
+
+  // Record the start time
+  startTime = millis();
+
+  // Initialize LCD
+  lcd.begin(16, 2);
+  lcd.clear();
+
+  // Initialize MPU6050
+  Wire.begin();
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x6B); // Power management register
+  Wire.write(0);    // Wake up MPU6050
+  Wire.endTransmission(true);
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+
+  // Read MPU6050 at intervals
+  if (currentMillis - lastMPURead >= mpuReadInterval) {
+    readMPU6050();
+    lastMPURead = currentMillis;
+  }
+
+  // Handle tilt action
+  if (!tiltActionCompleted && X > 24) {
+    executeTiltAction();
+    tiltActionCompleted = true;
+    startTime = millis(); // Reset start time for downramp
+  }
+
+  // Execute downramp or follow line
+  if (tiltActionCompleted && isRunning) {
+    downramp();
+  } else if (!isRunning) {
+    followLine();
+  }
+}
+
+void readMPU6050() {
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x3B); 
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU_ADDR, 6, true);
+
+  AcX = Wire.read() << 8 | Wire.read();
+  AcY = Wire.read() << 8 | Wire.read();
+  AcZ = Wire.read() << 8 | Wire.read();
+
+  // Calculate angle
+  X = RAD_TO_DEG * atan2(AcY, AcZ);
+}
+
+void followLine() {
+  int rightIRSensorValue = digitalRead(IR_SENSOR_RIGHT);
+  int leftIRSensorValue = digitalRead(IR_SENSOR_LEFT);
+
+  // Straight motion
+  if ((rightIRSensorValue == 1) && (leftIRSensorValue == 1)) {
+    digitalWrite(motor1pin1, HIGH);
+    digitalWrite(motor1pin2, LOW);
+    analogWrite(ENA, 120);
+
+    digitalWrite(motor2pin1, HIGH);
+    digitalWrite(motor2pin2, LOW);
+    analogWrite(ENB, 120);
+  }
+  // Turn right
+  else if ((rightIRSensorValue == 0) && (leftIRSensorValue == 1)) {
+    digitalWrite(motor1pin1, LOW);
+    digitalWrite(motor1pin2, HIGH);
+    analogWrite(ENA, 170);
+
+    digitalWrite(motor2pin1, HIGH);
+    digitalWrite(motor2pin2, LOW);
+    analogWrite(ENB, 255);
+  }
+  // Turn left
+  else if ((rightIRSensorValue == 1) && (leftIRSensorValue == 0)) {
+    digitalWrite(motor1pin1, HIGH);
+    digitalWrite(motor1pin2, LOW);
+    analogWrite(ENA, 255);
+
+    digitalWrite(motor2pin1, LOW);
+    digitalWrite(motor2pin2, HIGH);
+    analogWrite(ENB, 170);
+  }
+  // Stop
+  else {
+    digitalWrite(motor1pin1, LOW);
+    digitalWrite(motor1pin2, LOW);
+    analogWrite(ENA, 0);
+
+    digitalWrite(motor2pin1, LOW);
+    digitalWrite(motor2pin2, LOW);
+    analogWrite(ENB, 0);
+  }
+}
+
+void downramp() {
+  // Check elapsed time
+  if (isRunning && millis() - startTime >= runDuration) {
+    isRunning = false;
+    stopMotors(); // Stop the motors after the duration
+    return;
+  }
+
+  // If still within the allowed time, follow the line
+  if (isRunning) {
+    int rightIRSensorValue = digitalRead(IR_SENSOR_RIGHT);
+    int leftIRSensorValue = digitalRead(IR_SENSOR_LEFT);
+
+    // Straight motion
+    if ((rightIRSensorValue == 1) && (leftIRSensorValue == 1)) {
+      digitalWrite(motor1pin1, HIGH);
+      digitalWrite(motor1pin2, LOW);
+      analogWrite(ENA, 120);
+
+      digitalWrite(motor2pin1, HIGH);
+      digitalWrite(motor2pin2, LOW);
+      analogWrite(ENB, 120);
+    }
+    // Turn right
+    else if ((rightIRSensorValue == 0) && (leftIRSensorValue == 1)) {
+      digitalWrite(motor1pin1, LOW);
+      digitalWrite(motor1pin2, HIGH);
+      analogWrite(ENA, 170);
+
+      digitalWrite(motor2pin1, HIGH);
+      digitalWrite(motor2pin2, LOW);
+      analogWrite(ENB, 255);
+    }
+    // Turn left
+    else if ((rightIRSensorValue == 1) && (leftIRSensorValue == 0)) {
+      digitalWrite(motor1pin1, HIGH);
+      digitalWrite(motor1pin2, LOW);
+      analogWrite(ENA, 255);
+
+      digitalWrite(motor2pin1, LOW);
+      digitalWrite(motor2pin2, HIGH);
+      analogWrite(ENB, 170);
+    }
+    // Stop
+    else {
+      stopMotors();
+    }
+  }
+}
+
+void stopMotors() {
+  digitalWrite(motor1pin1, LOW);
+  digitalWrite(motor1pin2, LOW);
+  analogWrite(ENA, 0);
+
+  digitalWrite(motor2pin1, LOW);
+  digitalWrite(motor2pin2, LOW);
+  analogWrite(ENB, 0);
+}
+
+void executeTiltAction() {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Time: ");
+    lcd.print(millis() / 1000);
+
+    lcd.setCursor(0, 1);
+    lcd.print("Angle: ");
+    lcd.print(X);
+    lcd.print(" deg");
+
+    digitalWrite(motor1pin1, HIGH);
+    digitalWrite(motor1pin2, LOW);
+    analogWrite(ENA, 255);
+    analogWrite(ENB, 255);
+    digitalWrite(motor2pin1, HIGH);
+    digitalWrite(motor2pin2, LOW);
+    delay(1600);
+
+    digitalWrite(motor1pin1, LOW);
+    digitalWrite(motor1pin2, LOW);
+    analogWrite(ENA, 0);
+    digitalWrite(motor2pin1, LOW);
+    digitalWrite(motor2pin2, LOW);
+    analogWrite(ENB, 0);
+    delay(1000);
+
+    digitalWrite(motor1pin1, HIGH);
+    digitalWrite(motor1pin2, LOW);
+    analogWrite(ENA, 255);
+    analogWrite(ENB, 225);
+    digitalWrite(motor2pin1, LOW);
+    digitalWrite(motor2pin2, HIGH);
+    delay(3250);
+
+    digitalWrite(motor1pin1, LOW);
+    digitalWrite(motor1pin2, LOW);
+    analogWrite(ENA, 0);
+    digitalWrite(motor2pin1, LOW);
+    digitalWrite(motor2pin2, LOW);
+    analogWrite(ENB, 0);
+    delay(4000);
+}
+
+void displayData() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Angle: ");
+  lcd.print(X, 1);
+  lcd.print(" deg");
+}
